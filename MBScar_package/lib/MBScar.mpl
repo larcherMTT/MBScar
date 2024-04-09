@@ -33,12 +33,12 @@ MBScar := module()
          unload = ModuleUnload;
 
   # load required packages
-  use MBSymba_r6 in
+  uses MBSymba_r6;
 
   # local variables
   local m_WarningMode  := true; # default warning mode
   local m_TimeLimit    := 10.0; # default time limit for simplification
-  local m_ParallelMode := true; # default parallel mode
+  local m_ParallelMode := false; # default parallel mode # FIXME: not working yet
   #local m_CacheSize    := 20;   # default cache size for the chache tables
 
   # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -81,6 +81,11 @@ MBScar := module()
     TypeTools:-AddType('MBSymba_TORQUE', IsTORQUE); protect('MBSymba_TORQUE');
     TypeTools:-AddType('MBSymba_POINT',  IsPOINT);  protect('MBSymba_POINT');
     TypeTools:-AddType('MBSymba_VECTOR', IsVECTOR); protect('MBSymba_VECTOR');
+    TypeTools:-AddType('MBSymba_FRAME',  IsFRAME);  protect('MBSymba_FRAME');
+
+    # Set the default typesetting options
+    Typesetting:-Settings(typesetprime=true):
+    Typesetting:-Settings(typesetdot=true);
 
     return NULL;
   end proc: # ModuleLoad
@@ -101,7 +106,8 @@ MBScar := module()
   export SetModuleOptions := proc(
     {
     WarningMode::{boolean, nothing}   := NULL,
-    TimeLimit::{nonnegative, nothing} := NULL
+    TimeLimit::{nonnegative, nothing} := NULL,
+    ParallelMode::{boolean, nothing} := NULL
     }, $)
 
     description "Set the module options: warning mode <WarningMode>, time limit "
@@ -115,10 +121,29 @@ MBScar := module()
       m_TimeLimit := TimeLimit;
     end if;
 
+    if evalb(ParallelMode <> NULL) then
+      m_ParallelMode := ParallelMode;
+    end if;
+
     return NULL;
   end proc: # SetModuleOptions
 
   # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  export IsFRAME := proc(
+  var::anything,
+  $)::boolean;
+
+  description "Check if the variable <var> is of FRAME type.";
+
+  return type(var, Matrix) and
+    evalb(LinearAlgebra:-RowDimension(var) = 4) and
+    evalb(LinearAlgebra:-ColumnDimension(var) = 4) and
+    evalb(var[4, 1] = 0) and evalb(var[4, 2] = 0) and
+    evalb(var[4, 3] = 0) and evalb(var[4, 4] = 1);
+  end proc: # IsFRAME
+
+  # - - - - - - - - - - - - - - - -
 
   export IsBODY := proc(
   var::anything,
@@ -199,8 +224,6 @@ MBScar := module()
   end try;
   end proc: # IsEqual
 
-
-
   # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
   export Simplify := proc(
@@ -257,6 +280,60 @@ MBScar := module()
 
   # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+  export InverseFrame := proc(
+  RF::MBSymba_FRAME,
+  $)::MBSymba_FRAME;
+
+  description "Inverse affine transformation matrix <RF>.";
+
+  LinearAlgebra:-Transpose(RF[1..3, 1..3]);
+  return <<% | -%.RF[1..3, 4]>,
+          <0 | 0 | 0 | 1>>;
+  end proc: # InverseFrame
+
+  # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  export Project := proc(
+  obj::{MBSymba_VECTOR, MBSymba_POINT, MBSymba_FORCE, MBSymba_TORQUE},
+  RF_end::MBSymba_FRAME,
+  $)::{MBSymba_VECTOR, MBSymba_POINT, MBSymba_FORCE, MBSymba_TORQUE};
+
+  description "Project the vector/point/force/torque <x> from the reference frame "
+    "<RF_ini> to the reference frame <RF_end>.";
+  option remember;
+  local out, RF_ini, x;
+
+  out := copy(obj, deep);
+
+  RF_ini := evala(obj[parse("frame")]);
+  if IsPOINT(obj) then
+    x := obj[parse("coords")];
+  else
+    x := obj[parse("comps")];
+  end if;
+
+  # Try to compare reference frames
+  try
+    # FIXME: problems with floats (floats not handled error)
+    evalb~(evala(Simplify(RF_end) =~ Simplify(RF_ini)));
+  catch:
+    evalb~(RF_end =~ RF_ini);
+  end try;
+
+  # Return the projection
+  if has(%, false) then
+    if IsPOINT(obj) then
+      out[parse("coords")] := (InverseFrame(RF_end).RF_ini.x);
+    else
+      out[parse("comps")] := (InverseFrame(RF_end).RF_ini.x);
+    end if;
+    out[parse("frame")] := RF_end;
+  end if;
+  return out;
+end proc: # Project
+
+  # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
   export kinetic_energy_qv := proc(
   bodies::{list(MBSymba_BODY),set(MBSymba_BODY)},
   q_vars::list(scalar),
@@ -279,9 +356,9 @@ MBScar := module()
   userinfo(3, kinetic_energy_qv, "computing kinetic energy");
   for body in bodies do
     # linear velocity vector v_vec
-    v_vec := linear_velocity_qv(body, q_vars, qv_eqns);
+    v_vec := linear_velocity_qv(eval(body), q_vars, qv_eqns); # NOTE: eval(body) is used to prevent remember option to not-recoginze the change of the body variable
     # angular velocity vector omega_vec
-    omega_vec := angular_velocity_qv(body, q_vars, qv_eqns);
+    omega_vec := angular_velocity_qv(eval(body), q_vars, qv_eqns);
 
     # velocities vector VV
     VV := [op(v_vec), op(omega_vec)];
@@ -399,6 +476,65 @@ MBScar := module()
 
   # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+  local compute_generalized_force := proc(
+  m::anything, # mutex
+  j::integer,
+  Q::Array,
+  bodies::{list(MBSymba_BODY), set(MBSymba_BODY)},
+  forces::{list({MBSymba_FORCE, MBSymba_TORQUE}), set({MBSymba_FORCE, MBSymba_TORQUE})},
+  gamma::list(list(list(algebraic))),
+  beta::list(list(list(algebraic))),
+  $)::NULL;
+
+  description "Compute the generalized forces acting on the system.";
+  option remember;
+  local i::thread_local , body::thread_local, force::thread_local;
+
+  if m_ParallelMode then
+    #Threads:-Mutex:-Lock(m);
+    printf("Thread %d started\n", j);
+  end if;
+
+  i := 1;
+  for body in bodies do
+      for force in forces do
+        if IsFORCE(force) then
+          if IsEqual(force[parse("acting")], body) then
+            # printf("debug %d _1\n", j);
+            Q[j] := Q[j] + <MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-project(eval(force), body[parse("frame")]))>^%T . <gamma[i,j]>;
+            # printf("end debug %d _1\n", j);
+          elif IsEqual(force[parse("reacting")], body) then # NOTE: no force should have a reacting body after projection
+            # printf("debug %d _2\n", j);
+            Q[j] := Q[j] + <-MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-project(eval(force), body[parse("frame")]))>^%T . <gamma[i,j]>;
+            # printf("end debug %d _2\n", j);
+          end if;
+        elif IsTORQUE(force) then
+          if IsEqual(force[parse("acting")], body) then
+            # printf("debug %d _3\n", j);
+            Q[j] := Q[j] + <MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-project(eval(force), body[parse("frame")]))>^%T . <beta[i,j]>;
+            # printf("end debug %d _3\n", j);
+          elif IsEqual(force[parse("reacting")], body) then
+            # printf("debug %d _4\n", j);
+            Q[j] := Q[j] + <-MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-project(eval(force), body[parse("frame")]))>^%T . <beta[i,j]>;
+            # printf("end debug %d _4\n", j);
+          end if;
+        end if;
+        # printf("Here0\n", j);
+      end do;
+      i := i + 1;
+      # printf("Here1\n", j);
+  end do;
+  # printf("Here2\n", j);
+
+  if m_ParallelMode then
+    printf("Thread %d ended\n", j);
+    #Threads:-Mutex:-Unlock(m);
+  end if;
+  return NULL;
+  end proc;
+
+  # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
   export fundamental_equations := proc(
   mbo::{list({MBSymba_BODY,MBSymba_FORCE,MBSymba_TORQUE}),set({MBSymba_BODY,MBSymba_FORCE,MBSymba_TORQUE})},
   q_vars::list(scalar),
@@ -409,7 +545,7 @@ MBScar := module()
   description "Compute the fundamental equations of motion of the system.";
   option remember;
   local bodies, forces, obj, eqns, body, force, T, p, H, gamma, gamma_dot, beta, beta_dot,
-    v, omega, u, Q, i, j;
+    v, omega, u, Q, i, j, m, tmp;
 
   # if m_WarningMode then
   #   if nops(bodies) > m_CacheSize then
@@ -472,7 +608,7 @@ MBScar := module()
   userinfo(3, fundamental_equations, "computing bodies velocities vectors");
   v := [seq(0, i=1..nops(bodies))]; i := 1;
   for body in bodies do
-    v[i] := linear_velocity_qv(body, q_vars, qv_eqns);
+    v[i] := linear_velocity_qv(eval(body), q_vars, qv_eqns);
     userinfo(4, fundamental_equations, "linear velocity", i, " = ", print(v[i]));
     i := i + 1;
   end do;
@@ -482,7 +618,7 @@ MBScar := module()
   userinfo(3, fundamental_equations, "computing bodies angular velocity vectors");
   omega := [seq(0, i=1..nops(bodies))]; i := 1;
   for body in bodies do
-    omega[i] := angular_velocity_qv(body, q_vars, qv_eqns);
+    omega[i] := angular_velocity_qv(eval(body), q_vars, qv_eqns);
     userinfo(4, fundamental_equations, "angular velocity", i, " = ", print(omega[i]));
     i := i + 1;
   end do;
@@ -526,37 +662,29 @@ MBScar := module()
 
   # compute generalized forces
   userinfo(3, fundamental_equations, "computing generalized forces");
-  Q := [seq(0, j=1..nops(u_vars))]; i := 1; j := 1;
-  for u in u_vars do
-    for body in bodies do
-        for force in forces do
-          if IsFORCE(force) then
-            if IsEqual(force[parse("acting")], body) then
-              Q[j] := Q[j] + <MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-project(force, body[parse("frame")]))>^%T . <gamma[i,j]>;
-            elif IsEqual(force[parse("reacting")], body) then # NOTE: no force should have a reacting body after projection
-              Q[j] := Q[j] + <-MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-project(force, body[parse("frame")]))>^%T . <gamma[i,j]>;
-            end if;
-          elif IsTORQUE(force) then
-            if IsEqual(force[parse("acting")], body) then
-              Q[j] := Q[j] + <MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-project(force, body[parse("frame")]))>^%T . <beta[i,j]>;
-            elif IsEqual(force[parse("reacting")], body) then
-              Q[j] := Q[j] + <-MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-project(force, body[parse("frame")]))>^%T . <beta[i,j]>;
-            end if;
-          end if;
-          userinfo(4, fundamental_equations, "generalized force", j, " = ", print(Q[j]));
-        end do;
-        i := i + 1;
+  Q := Array(1..nops(u_vars)); j := 1; [seq(0, j=1..nops(u_vars))]; j := 1;
+  if m_ParallelMode then
+    #m := Threads:-Mutex:-Create();
+    #Threads:-Task:-Start( null, seq(Task=[compute_generalized_force, m, j, Q, bodies, forces, gamma, beta], j = 1..nops(u_vars)) ):
+    #Threads:-Map[2](compute_generalized_force, m, [seq(j, j=1..nops(u_vars))], Q, bodies, forces, gamma, beta);
+    Threads:-Wait(seq(Threads:-Create(compute_generalized_force(m, j, Q, bodies, forces, gamma, beta)),j=1..nops(u_vars))):
+    #Threads:-Mutex:-Destroy(m);
+    userinfo(4, fundamental_equations, "generalized forces = ", print(convert(Q, list)));
+  else
+    for u in u_vars do
+      compute_generalized_force(1, j, Q, bodies, forces, gamma, beta);
+      userinfo(4, fundamental_equations, "generalized force", j, " = ", print(Q[j]));
+      j := j + 1;
     end do;
-    i := 1;
-    j := j + 1;
-  end do;
+  end if;
+  convert(Q, list);
   userinfo(3, fundamental_equations, "computing generalized forces -- DONE");
 
   # compute bodies linear momentum
   userinfo(3, fundamental_equations, "computing bodies linear momentum");
   p := [seq(0, i=1..nops(bodies))]; i := 1;
   for body in bodies do
-    p[i] := linear_momentum_qv(body, q_vars, qv_eqns);
+    p[i] := linear_momentum_qv(eval(body), q_vars, qv_eqns);
     userinfo(4, fundamental_equations, "linear momentum", i, " = ", print(p[i]));
     i := i + 1;
   end do;
@@ -566,7 +694,7 @@ MBScar := module()
   userinfo(3, fundamental_equations, "computing bodies angular momentum");
   H := [seq(0, i=1..nops(bodies))]; i := 1;
   for body in bodies do
-    H[i] := angular_momentum_qv(body, q_vars, qv_eqns);
+    H[i] := angular_momentum_qv(eval(body), q_vars, qv_eqns);
     userinfo(4, fundamental_equations, "angular momentum", i, " = ", print(H[i]));
     i := i + 1;
   end do;
@@ -582,11 +710,11 @@ MBScar := module()
   userinfo(3, fundamental_equations, "computing fundamental equations of motion");
   eqns := [seq(0, j=1..nops(u_vars))]; j := 1; i := 1;
   for u in u_vars do
-    simplify(simplify(diff(Physics:-diff(T,u),t), qv_eqns, diff(q_vars,t)),trig); # d(d(T)/du)/dt
-    if has(%, diff(q_vars,t)) then
+    tmp := simplify(simplify(diff(Physics:-diff(T,u),t), qv_eqns, diff(q_vars,t)),trig); # d(d(T)/du)/dt
+    if has(tmp, diff(q_vars,t)) then
       error "linear velocity contains time derivatives of the generalized coordinates";
     end if;
-    eqns[j] := % - Q[j];
+    eqns[j] := tmp - Q[j];
     for body in bodies do
       # fundamental equation of motion (4.227 book)
       eqns[j] := eqns[j] - <p[i]>^%T . <gamma_dot[i,j]> - <H[i]>^%T . <beta_dot[i,j]>;
@@ -604,7 +732,6 @@ MBScar := module()
 
   # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-end use:
 end module: # MBscar_EQM
 
 # That's all folks!
