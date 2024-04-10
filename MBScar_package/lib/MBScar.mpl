@@ -330,7 +330,41 @@ MBScar := module()
     out[parse("frame")] := RF_end;
   end if;
   return out;
-end proc: # Project
+  end proc: # Project
+
+  # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  local qv_solve := proc(
+  qv_eqns::list({algebraic, `=`}),
+  q_vars::list(scalar),
+  $)::list(algebraic);
+
+  description "Solve the quasi-velocities equations <qv_eqns> for the quasi-velocities "
+    "variables <q_vars>.";
+  option remember;
+
+  return solve(qv_eqns, diff(q_vars, t));
+  end proc;
+
+  # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  local qu_subs := proc(
+  expr::anything,
+  q_vars::list(scalar),
+  qv_eqns::list({algebraic, `=`}),
+  $)::anything;
+
+  description "Substitute the generalized coordinates with the quasi-velocities "
+    "in the expression <expr>.";
+  option remember;
+
+  #return simplify(simplify(expr, qv_eqns, diff(q_vars,t)),trig);
+  # if has(%, diff(q_vars,t)) then
+  #   error "unable to substitute the generalized coordinates with the quasi-velocities";
+  # end if;
+  qv_solve(qv_eqns, q_vars);
+  return Simplify(subs(op(%), expr));
+  end proc;
 
   # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -391,10 +425,7 @@ end proc: # Project
   local v_vec;
 
   userinfo(3, linear_velocity_qv, "computing linear velocity");
-  v_vec := simplify(simplify([MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-velocity(MBSymba_r6_kinematics:-origin(body[parse("frame")])),body[parse("frame")])], qv_eqns, diff(q_vars,t)),trig);
-  if has(v_vec, diff(q_vars,t)) then
-    error "linear velocity contains time derivatives of the generalized coordinates";
-  end if;
+  v_vec := qu_subs([MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-velocity(MBSymba_r6_kinematics:-origin(body[parse("frame")])),body[parse("frame")])], q_vars, qv_eqns);
   userinfo(5, linear_velocity_qv, "linear velocity vector", print(v_vec));
   userinfo(3, linear_velocity_qv, "computing linear velocity -- DONE");
 
@@ -414,10 +445,7 @@ end proc: # Project
   local omega_vec;
 
   userinfo(3, angular_velocity_qv, "computing angular velocity");
-  omega_vec := simplify(simplify([MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-angular_velocity(body[parse("frame")]),body[parse("frame")])], qv_eqns, diff(q_vars,t)),trig);
-  if has(omega_vec, diff(q_vars,t)) then
-    error "angular velocity contains time derivatives of the generalized coordinates";
-  end if;
+  omega_vec := qu_subs([MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-angular_velocity(body[parse("frame")]),body[parse("frame")])], q_vars, qv_eqns);
   userinfo(5, angular_velocity_qv, "angular velocity vector", print(omega_vec));
   userinfo(3, angular_velocity_qv, "computing angular velocity -- DONE");
 
@@ -570,8 +598,10 @@ end proc: # Project
   # create bodies gravity forces
   userinfo(3, fundamental_equations, "creating gravity forces");
   for body in bodies do
-    forces := [op(forces), MBSymba_r6_dynamics:-make_FORCE(MBSymba_r6_kinematics:-make_VECTOR(_gravity[parse("frame")], op([MBSymba_r6_kinematics:-comp_XYZ(_gravity)] *~ body[parse("mass")])), MBSymba_r6_kinematics:-origin(body[parse("frame")]), body)];
-    userinfo(5, fundamental_equations, "gravity force", print(show(forces[-1])));
+    if body[parse("mass")] <> 0 then
+      forces := [op(forces), MBSymba_r6_dynamics:-make_FORCE(MBSymba_r6_kinematics:-make_VECTOR(_gravity[parse("frame")], op([MBSymba_r6_kinematics:-comp_XYZ(_gravity)] *~ body[parse("mass")])), MBSymba_r6_kinematics:-origin(body[parse("frame")]), body)];
+      userinfo(5, fundamental_equations, "gravity force", print(show(forces[-1])));
+    end if;
   end do;
   userinfo(3, fundamental_equations, "creating gravity forces -- DONE");
 
@@ -579,26 +609,29 @@ end proc: # Project
   userinfo(3, fundamental_equations, "projecting forces in bodies center of mass");
   for force in forces do
     if IsFORCE(force) then
-      # add the additional torque to the forces list (FIXME: MBSymba_r6_kinematics:-cross_product have performance issues, consider to implement a custom cross/dot product)
-      MBSymba_r6_kinematics:-cross_prod(MBSymba_r6_kinematics:-join_points(MBSymba_r6_kinematics:-origin(force[parse("acting")][parse("frame")]), force[parse("applied")]), force);
-      forces := [op(forces), %];
-      userinfo(5, fundamental_equations, "translational torque", print(show(forces[-1])));
-      # create "acting" torque on reacting body
-      if has(lhs~(op(op(force))), parse("reacting")) then
-        MBSymba_r6_kinematics:-cross_prod(MBSymba_r6_kinematics:-join_points(MBSymba_r6_kinematics:-origin(force[parse("reacting")][parse("frame")]), force[parse("applied")]), force);
-        %[parse("comps")] := -%[parse("comps")];
+      MBSymba_r6_kinematics:-join_points(force[parse("applied")], MBSymba_r6_kinematics:-origin(force[parse("acting")][parse("frame")])):
+      if MBSymba_r6_kinematics:-dot_prod(%,%) <> 0 then
+        # add the additional torque to the forces list (FIXME: MBSymba_r6_kinematics:-cross_product have performance issues, consider to implement a custom cross/dot product)
+        MBSymba_r6_kinematics:-cross_prod(MBSymba_r6_kinematics:-join_points(MBSymba_r6_kinematics:-origin(force[parse("acting")][parse("frame")]), force[parse("applied")]), force);
         forces := [op(forces), %];
-        userinfo(5, fundamental_equations, "translational torque (reacting body)", print(show(forces[-1])));
-        force[parse("reacting")] := NULL;
-      end if;
-      # change application point to body origin (reference point)
-      force[parse("applied")] := evala(MBSymba_r6_kinematics:-origin(force[parse("acting")][parse("frame")]));
-      userinfo(5, fundamental_equations, "projected force", print(show(force)));
-      # create "acting" force on reacting body
-      if has(lhs~(op(op(force))), parse("reacting")) then
-        MBSymba_r6_dynamics:-make_FORCE(MBSymba_r6_kinematics:-make_VECTOR(-force[parse("comps")], force[parse("frame")]), MBSymba_r6_kinematics:-origin(force[parse("reacting")][parse("frame")]), force[parse("reacting")]);
-        forces := [op(forces), %];
-        userinfo(5, fundamental_equations, "projected force (reacting body)", print(show(forces[-1])));
+        userinfo(5, fundamental_equations, "translational torque", print(show(forces[-1])));
+        # create "acting" torque on reacting body
+        if has(lhs~(op(op(force))), parse("reacting")) then
+          MBSymba_r6_kinematics:-cross_prod(MBSymba_r6_kinematics:-join_points(MBSymba_r6_kinematics:-origin(force[parse("reacting")][parse("frame")]), force[parse("applied")]), force);
+          %[parse("comps")] := -%[parse("comps")];
+          forces := [op(forces), %];
+          userinfo(5, fundamental_equations, "translational torque (reacting body)", print(show(forces[-1])));
+          force[parse("reacting")] := NULL;
+        end if;
+        # change application point to body origin (reference point)
+        force[parse("applied")] := evala(MBSymba_r6_kinematics:-origin(force[parse("acting")][parse("frame")]));
+        userinfo(5, fundamental_equations, "projected force", print(show(force)));
+        # create "acting" force on reacting body
+        if has(lhs~(op(op(force))), parse("reacting")) then
+          MBSymba_r6_dynamics:-make_FORCE(MBSymba_r6_kinematics:-make_VECTOR(-force[parse("comps")], force[parse("frame")]), MBSymba_r6_kinematics:-origin(force[parse("reacting")][parse("frame")]), force[parse("reacting")]);
+          forces := [op(forces), %];
+          userinfo(5, fundamental_equations, "projected force (reacting body)", print(show(forces[-1])));
+        end if;
       end if;
     end if;
   end do;
@@ -609,7 +642,7 @@ end proc: # Project
   v := [seq(0, i=1..nops(bodies))]; i := 1;
   for body in bodies do
     v[i] := linear_velocity_qv(eval(body), q_vars, qv_eqns);
-    userinfo(4, fundamental_equations, "linear velocity", i, " = ", print(v[i]));
+    userinfo(5, fundamental_equations, "linear velocity", i, " = ", print(v[i]));
     i := i + 1;
   end do;
   userinfo(3, fundamental_equations, "computing bodies velocities vectors -- DONE");
@@ -619,7 +652,7 @@ end proc: # Project
   omega := [seq(0, i=1..nops(bodies))]; i := 1;
   for body in bodies do
     omega[i] := angular_velocity_qv(eval(body), q_vars, qv_eqns);
-    userinfo(4, fundamental_equations, "angular velocity", i, " = ", print(omega[i]));
+    userinfo(5, fundamental_equations, "angular velocity", i, " = ", print(omega[i]));
     i := i + 1;
   end do;
   userinfo(3, fundamental_equations, "computing bodies angular velocity vectors -- DONE");
@@ -632,9 +665,9 @@ end proc: # Project
   for body in bodies do
     for u in u_vars do
       gamma[i,j] := Physics:-diff(v[i], u); #(4.223 book)
-      userinfo(4, fundamental_equations, "gamma", i, j, " = ", print(gamma[i,j]));
+      userinfo(5, fundamental_equations, "gamma", i, j, " = ", print(gamma[i,j]));
       gamma_dot[i,j] := diff(gamma[i,j],t) +~ convert(LinearAlgebra:-CrossProduct(omega[i], gamma[i,j]), list); # Poisson's formula
-      userinfo(4, fundamental_equations, "gamma_dot", i, j, " = ", print(gamma_dot[i,j]));
+      userinfo(5, fundamental_equations, "gamma_dot", i, j, " = ", print(gamma_dot[i,j]));
       j := j + 1;
     end do;
     j := 1;
@@ -650,9 +683,9 @@ end proc: # Project
   for body in bodies do
     for u in u_vars do
       beta[i,j] := Physics:-diff(omega[i], u); #(4.223 book)
-      userinfo(4, fundamental_equations, "beta", i, j, " = ", print(beta[i,j]));
+      userinfo(5, fundamental_equations, "beta", i, j, " = ", print(beta[i,j]));
       beta_dot[i,j] := diff(beta[i,j],t) +~ convert(LinearAlgebra:-CrossProduct(omega[i], beta[i,j]), list); # Poisson's formula
-      userinfo(4, fundamental_equations, "beta_dot", i, j, " = ", print(beta_dot[i,j]));
+      userinfo(5, fundamental_equations, "beta_dot", i, j, " = ", print(beta_dot[i,j]));
       j := j + 1;
     end do;
     j := 1;
@@ -672,8 +705,9 @@ end proc: # Project
     userinfo(4, fundamental_equations, "generalized forces = ", print(convert(Q, list)));
   else
     for u in u_vars do
+      userinfo(4, fundamental_equations, "computing generalized force", j, " for the quasi-velocity ", u);
       compute_generalized_force(1, j, Q, bodies, forces, gamma, beta);
-      userinfo(4, fundamental_equations, "generalized force", j, " = ", print(Q[j]));
+      userinfo(5, fundamental_equations, "generalized force", j, " = ", print(Q[j]));
       j := j + 1;
     end do;
   end if;
@@ -685,7 +719,7 @@ end proc: # Project
   p := [seq(0, i=1..nops(bodies))]; i := 1;
   for body in bodies do
     p[i] := linear_momentum_qv(eval(body), q_vars, qv_eqns);
-    userinfo(4, fundamental_equations, "linear momentum", i, " = ", print(p[i]));
+    userinfo(5, fundamental_equations, "linear momentum", i, " = ", print(p[i]));
     i := i + 1;
   end do;
   userinfo(3, fundamental_equations, "computing bodies linear momentum -- DONE");
@@ -695,7 +729,7 @@ end proc: # Project
   H := [seq(0, i=1..nops(bodies))]; i := 1;
   for body in bodies do
     H[i] := angular_momentum_qv(eval(body), q_vars, qv_eqns);
-    userinfo(4, fundamental_equations, "angular momentum", i, " = ", print(H[i]));
+    userinfo(5, fundamental_equations, "angular momentum", i, " = ", print(H[i]));
     i := i + 1;
   end do;
   userinfo(3, fundamental_equations, "computing bodies angular momentum -- DONE");
@@ -703,24 +737,22 @@ end proc: # Project
   # compute kinetic energy
   userinfo(3, fundamental_equations, "computing kinetic energy");
   T := kinetic_energy_qv(bodies, q_vars, QV_eq);
-  userinfo(4, fundamental_equations, "kinetic energy", print(T));
+  userinfo(5, fundamental_equations, "kinetic energy", print(T));
   userinfo(3, fundamental_equations, "computing kinetic energy -- DONE");
 
   # compute fundamental equation of motion
   userinfo(3, fundamental_equations, "computing fundamental equations of motion");
   eqns := [seq(0, j=1..nops(u_vars))]; j := 1; i := 1;
   for u in u_vars do
-    tmp := simplify(simplify(diff(Physics:-diff(T,u),t), qv_eqns, diff(q_vars,t)),trig); # d(d(T)/du)/dt
-    if has(tmp, diff(q_vars,t)) then
-      error "linear velocity contains time derivatives of the generalized coordinates";
-    end if;
+    userinfo(4, fundamental_equations, "computing equation of motion", j, " for the quasi-velocity ", u);
+    tmp := qu_subs(diff(Physics:-diff(T,u),t), q_vars, qv_eqns); # d(d(T)/du)/dt
     eqns[j] := tmp - Q[j];
     for body in bodies do
       # fundamental equation of motion (4.227 book)
       eqns[j] := eqns[j] - <p[i]>^%T . <gamma_dot[i,j]> - <H[i]>^%T . <beta_dot[i,j]>;
       i := i + 1;
     end do;
-    userinfo(4, fundamental_equations, "equation of motion", j, " = ", print(eqns[j]));
+    userinfo(5, fundamental_equations, "equation of motion", j, " = ", print(eqns[j]));
     i := 1;
     j := j + 1;
   end do;
