@@ -36,9 +36,9 @@ MBScar := module()
   uses MBSymba_r6;
 
   # local variables
-  local m_WarningMode  := true; # default warning mode
-  local m_TimeLimit    := 10.0; # default time limit for simplification
-  local m_ParallelMode := false; # default parallel mode # FIXME: not working yet
+  local m_WarningMode  := true;  # default warning mode
+  local m_TimeLimit    := 10.0;  # default time limit for simplification
+  local m_ParallelMode := false; # default parallel mode
   #local m_CacheSize    := 20;   # default cache size for the chache tables
 
   # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -301,7 +301,7 @@ MBScar := module()
   description "Project the vector/point/force/torque <x> from the reference frame "
     "<RF_ini> to the reference frame <RF_end>.";
   option remember;
-  local out, RF_ini, x;
+  local out::thread_local, RF_ini::thread_local, x::thread_local;
 
   out := copy(obj, deep);
 
@@ -331,6 +331,29 @@ MBScar := module()
   end if;
   return out;
   end proc: # Project
+
+  # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  local Diff_f := proc(
+  expr::anything,
+  fun::{scalar, list(scalar)},
+  $)::anything;
+
+  description "Differentiate the expression <expr> with respect to the function "
+    "<fun>.";
+  option remember;
+  local sub::thread_local, bus::thread_local;
+
+  if type(fun, list) then
+    sub := {seq(fun[i] = XX__||i, i=1..nops(fun))};
+    bus := rhs~(sub) =~ lhs~(sub);
+    diff(subs(sub, expr), rhs~(sub));
+    return subs(bus, %);
+  else
+    diff(subs(fun = XX, expr), XX);
+    return subs(XX = fun, %);
+  end if;
+  end proc: # Diff_f
 
   # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -504,6 +527,53 @@ MBScar := module()
 
   # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+  local compute_feqm := proc(
+  m::anything, # mutex
+  j::integer,
+  eqns::Array,
+  q_vars::list(scalar),
+  u_vars::list(scalar),
+  qv_eqns::list({algebraic, `=`}),
+  bodies::anything, # {list(MBSymba_BODY), set(MBSymba_BODY)} # FIXME conflict with Threads
+  T::algebraic,
+  p::list(list(algebraic)),
+  H::list(list(algebraic)),
+  Q::list(algebraic),
+  gamma_dot::list(list(list(algebraic))),
+  beta_dot::list(list(list(algebraic))),
+  $)::NULL;
+
+  description "Compute the fundamental equations of motion of the system.";
+  option remember;
+  local i::thread_local, body::thread_local, u::thread_local;
+
+  if m_ParallelMode then
+    #Threads:-Mutex:-Lock(m);
+    printf("Thread %d started\n", j);
+  end if;
+
+  u := u_vars[j];
+  i := 1;
+
+  userinfo(4, fundamental_equations, "computing equation of motion", j, " for the quasi-velocity ", u);
+  qu_subs(diff(Diff_f(T,u),t), q_vars, qv_eqns); # d(d(T)/du)/dt
+  eqns[j] := % - Q[j];
+  for body in bodies do
+    # fundamental equation of motion (4.227 book)
+    eqns[j] := eqns[j] - <p[i]>^%T . <gamma_dot[i,j]> - <H[i]>^%T . <beta_dot[i,j]>;
+    i := i + 1;
+  end do;
+  userinfo(5, fundamental_equations, "equation of motion", j, " = ", print(eqns[j]));
+
+  if m_ParallelMode then
+    printf("Thread %d ended\n", j);
+    #Threads:-Mutex:-Unlock(m);
+  end if;
+  return NULL;
+  end proc;
+
+  # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
   local compute_generalized_force := proc(
   m::anything, # mutex
   j::integer,
@@ -529,21 +599,21 @@ MBScar := module()
         if IsFORCE(force) then
           if IsEqual(force[parse("acting")], body) then
             # printf("debug %d _1\n", j);
-            Q[j] := Q[j] + <MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-project(eval(force), body[parse("frame")]))>^%T . <gamma[i,j]>;
+            Q[j] := Q[j] + <MBSymba_r6_kinematics:-comp_XYZ(Project(eval(force), eval(body[parse("frame")])))>^%T . <gamma[i,j]>;
             # printf("end debug %d _1\n", j);
           elif IsEqual(force[parse("reacting")], body) then # NOTE: no force should have a reacting body after projection
             # printf("debug %d _2\n", j);
-            Q[j] := Q[j] + <-MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-project(eval(force), body[parse("frame")]))>^%T . <gamma[i,j]>;
+            Q[j] := Q[j] + <-MBSymba_r6_kinematics:-comp_XYZ(Project(eval(force), eval(body[parse("frame")])))>^%T . <gamma[i,j]>;
             # printf("end debug %d _2\n", j);
           end if;
         elif IsTORQUE(force) then
           if IsEqual(force[parse("acting")], body) then
             # printf("debug %d _3\n", j);
-            Q[j] := Q[j] + <MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-project(eval(force), body[parse("frame")]))>^%T . <beta[i,j]>;
+            Q[j] := Q[j] + <MBSymba_r6_kinematics:-comp_XYZ(Project(eval(force), eval(body[parse("frame")])))>^%T . <beta[i,j]>;
             # printf("end debug %d _3\n", j);
           elif IsEqual(force[parse("reacting")], body) then
             # printf("debug %d _4\n", j);
-            Q[j] := Q[j] + <-MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-project(eval(force), body[parse("frame")]))>^%T . <beta[i,j]>;
+            Q[j] := Q[j] + <-MBSymba_r6_kinematics:-comp_XYZ(Project(eval(force), eval(body[parse("frame")])))>^%T . <beta[i,j]>;
             # printf("end debug %d _4\n", j);
           end if;
         end if;
@@ -664,7 +734,7 @@ MBScar := module()
   i := 1; j := 1;
   for body in bodies do
     for u in u_vars do
-      gamma[i,j] := Physics:-diff(v[i], u); #(4.223 book)
+      gamma[i,j] := Diff_f(v[i], u); #(4.223 book)
       userinfo(5, fundamental_equations, "gamma", i, j, " = ", print(gamma[i,j]));
       gamma_dot[i,j] := diff(gamma[i,j],t) +~ convert(LinearAlgebra:-CrossProduct(omega[i], gamma[i,j]), list); # Poisson's formula
       userinfo(5, fundamental_equations, "gamma_dot", i, j, " = ", print(gamma_dot[i,j]));
@@ -682,7 +752,7 @@ MBScar := module()
   i := 1; j := 1;
   for body in bodies do
     for u in u_vars do
-      beta[i,j] := Physics:-diff(omega[i], u); #(4.223 book)
+      beta[i,j] := Diff_f(omega[i], u); #(4.223 book)
       userinfo(5, fundamental_equations, "beta", i, j, " = ", print(beta[i,j]));
       beta_dot[i,j] := diff(beta[i,j],t) +~ convert(LinearAlgebra:-CrossProduct(omega[i], beta[i,j]), list); # Poisson's formula
       userinfo(5, fundamental_equations, "beta_dot", i, j, " = ", print(beta_dot[i,j]));
@@ -702,7 +772,7 @@ MBScar := module()
     #Threads:-Map[2](compute_generalized_force, m, [seq(j, j=1..nops(u_vars))], Q, bodies, forces, gamma, beta);
     Threads:-Wait(seq(Threads:-Create(compute_generalized_force(m, j, Q, bodies, forces, gamma, beta)),j=1..nops(u_vars))):
     #Threads:-Mutex:-Destroy(m);
-    userinfo(4, fundamental_equations, "generalized forces = ", print(convert(Q, list)));
+    userinfo(5, fundamental_equations, "generalized forces = ", print(convert(Q, list)));
   else
     for u in u_vars do
       userinfo(4, fundamental_equations, "computing generalized force", j, " for the quasi-velocity ", u);
@@ -711,7 +781,7 @@ MBScar := module()
       j := j + 1;
     end do;
   end if;
-  convert(Q, list);
+  Q := convert(Q, list);
   userinfo(3, fundamental_equations, "computing generalized forces -- DONE");
 
   # compute bodies linear momentum
@@ -742,24 +812,22 @@ MBScar := module()
 
   # compute fundamental equation of motion
   userinfo(3, fundamental_equations, "computing fundamental equations of motion");
-  eqns := [seq(0, j=1..nops(u_vars))]; j := 1; i := 1;
-  for u in u_vars do
-    userinfo(4, fundamental_equations, "computing equation of motion", j, " for the quasi-velocity ", u);
-    tmp := qu_subs(diff(Physics:-diff(T,u),t), q_vars, qv_eqns); # d(d(T)/du)/dt
-    eqns[j] := tmp - Q[j];
-    for body in bodies do
-      # fundamental equation of motion (4.227 book)
-      eqns[j] := eqns[j] - <p[i]>^%T . <gamma_dot[i,j]> - <H[i]>^%T . <beta_dot[i,j]>;
-      i := i + 1;
+  eqns := Array(1..nops(u_vars)); j := 1; i := 1;
+  if m_ParallelMode then
+    #m := Threads:-Mutex:-Create();
+    Threads:-Wait(seq(Threads:-Create(compute_feqm(m, j, eqns, q_vars, u_vars, qv_eqns, bodies, T, p, H, Q, gamma_dot, beta_dot)),j=1..nops(u_vars))):
+    #Threads:-Mutex:-Destroy(m);
+  else
+    for u in u_vars do
+      compute_feqm(1, j, eqns, q_vars, u_vars, qv_eqns, bodies, T, p, H, Q, gamma_dot, beta_dot);
+      j := j + 1;
     end do;
-    userinfo(5, fundamental_equations, "equation of motion", j, " = ", print(eqns[j]));
-    i := 1;
-    j := j + 1;
-  end do;
+  end if;
+  eqns := convert(eqns, list);
 
   userinfo(3, fundamental_equations, "computing fundamental equations of motion -- DONE");
 
-  return Simplify(eqns);
+  return Simplify[m_TimeLimit * nops(u_vars)](eqns);
   end proc;
 
   # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
