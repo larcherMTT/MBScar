@@ -736,7 +736,8 @@ MBScar := module()
     for u in u_vars do
       gamma[i,j] := Diff_f(v[i], u); #(4.223 book)
       userinfo(5, fundamental_equations, "gamma", i, j, " = ", print(gamma[i,j]));
-      gamma_dot[i,j] := diff(gamma[i,j],t) +~ convert(LinearAlgebra:-CrossProduct(omega[i], gamma[i,j]), list); # Poisson's formula
+      diff(gamma[i,j],t) +~ convert(LinearAlgebra:-CrossProduct(omega[i], gamma[i,j]), list); # Poisson's formula
+      gamma_dot[i,j] := qu_subs(%, q_vars, qv_eqns);
       userinfo(5, fundamental_equations, "gamma_dot", i, j, " = ", print(gamma_dot[i,j]));
       j := j + 1;
     end do;
@@ -754,7 +755,8 @@ MBScar := module()
     for u in u_vars do
       beta[i,j] := Diff_f(omega[i], u); #(4.223 book)
       userinfo(5, fundamental_equations, "beta", i, j, " = ", print(beta[i,j]));
-      beta_dot[i,j] := diff(beta[i,j],t) +~ convert(LinearAlgebra:-CrossProduct(omega[i], beta[i,j]), list); # Poisson's formula
+      diff(beta[i,j],t) +~ convert(LinearAlgebra:-CrossProduct(omega[i], beta[i,j]), list); # Poisson's formula
+      beta_dot[i,j] := qu_subs(%, q_vars, qv_eqns);
       userinfo(5, fundamental_equations, "beta_dot", i, j, " = ", print(beta_dot[i,j]));
       j := j + 1;
     end do;
