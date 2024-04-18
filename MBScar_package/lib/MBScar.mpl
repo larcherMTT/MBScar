@@ -16,7 +16,6 @@
 (*
 TODO:
   - add "convenient" reference frame to simplify formulation of symmetrical bodies (see end of page 238 book)
-  - add and test constraints handling
 *)
 
 MBScar := module()
@@ -357,24 +356,32 @@ MBScar := module()
 
   # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-  local qv_solve := proc(
+  export qv_solve := proc(
   qv_eqns::list({algebraic, `=`}),
   q_vars::list(scalar),
+  {constr::list(scalar) := [NULL]},
   $)::list(algebraic);
 
   description "Solve the quasi-velocities equations <qv_eqns> for the quasi-velocities "
     "variables <q_vars>.";
   option remember;
+  local sol::thread_local;
 
-  return solve(qv_eqns, diff(q_vars, t));
+  sol := solve(subs(constr =~ 0, qv_eqns), diff(q_vars, t));
+  if nops(%) = 0 then
+    error "unable to solve the quasi-velocities equations";
+  end if;
+  #return Simplify(op(sol));
+  return op(sol);
   end proc;
 
   # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-  local qu_subs := proc(
+  export qu_subs := proc(
   expr::anything,
   q_vars::list(scalar),
   qv_eqns::list({algebraic, `=`}),
+  {constr::list(scalar) := [NULL]},
   $)::anything;
 
   description "Substitute the generalized coordinates with the quasi-velocities "
@@ -385,7 +392,7 @@ MBScar := module()
   # if has(%, diff(q_vars,t)) then
   #   error "unable to substitute the generalized coordinates with the quasi-velocities";
   # end if;
-  qv_solve(qv_eqns, q_vars);
+  qv_solve(qv_eqns, q_vars, parse("constr") = constr);
   return Simplify(subs(op(%), expr));
   end proc;
 
@@ -395,6 +402,7 @@ MBScar := module()
   bodies::{list(MBSymba_BODY),set(MBSymba_BODY)},
   q_vars::list(scalar),
   qv_eqns::list({algebraic, `=`}),
+  {constr::list(scalar) := [NULL]},
   $)::algebraic;
 
   description "Compute the kinetic energy of the system in terms of the quasi-velocities.";
@@ -413,9 +421,9 @@ MBScar := module()
   userinfo(3, kinetic_energy_qv, "computing kinetic energy");
   for body in bodies do
     # linear velocity vector v_vec
-    v_vec := linear_velocity_qv(eval(body), q_vars, qv_eqns); # NOTE: eval(body) is used to prevent remember option to not-recoginze the change of the body variable
+    v_vec := linear_velocity_qv(eval(body), q_vars, qv_eqns, parse("constr") = constr); # NOTE: eval(body) is used to prevent remember option to not-recoginze the change of the body variable
     # angular velocity vector omega_vec
-    omega_vec := angular_velocity_qv(eval(body), q_vars, qv_eqns);
+    omega_vec := angular_velocity_qv(eval(body), q_vars, qv_eqns, parse("constr") = constr);
 
     # velocities vector VV
     VV := [op(v_vec), op(omega_vec)];
@@ -441,6 +449,7 @@ MBScar := module()
   body::MBSymba_BODY,
   q_vars::list(scalar),
   qv_eqns::list({algebraic, `=`}),
+  {constr::list(scalar) := [NULL]},
   $)
 
   description "Compute the linear velocity of the body terms of the quasi-velocities.";
@@ -448,7 +457,7 @@ MBScar := module()
   local v_vec;
 
   userinfo(3, linear_velocity_qv, "computing linear velocity");
-  v_vec := qu_subs([MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-velocity(MBSymba_r6_kinematics:-origin(body[parse("frame")])),body[parse("frame")])], q_vars, qv_eqns);
+  v_vec := qu_subs([MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-velocity(MBSymba_r6_kinematics:-origin(body[parse("frame")])),body[parse("frame")])], q_vars, qv_eqns, parse("constr") = constr);
   userinfo(5, linear_velocity_qv, "linear velocity vector", print(v_vec));
   userinfo(3, linear_velocity_qv, "computing linear velocity -- DONE");
 
@@ -461,6 +470,7 @@ MBScar := module()
   body::MBSymba_BODY,
   q_vars::list(scalar),
   qv_eqns::list({algebraic, `=`}),
+  {constr::list(scalar) := [NULL]},
   $)
 
   description "Compute the angular velocity of the body terms of the quasi-velocities.";
@@ -468,7 +478,7 @@ MBScar := module()
   local omega_vec;
 
   userinfo(3, angular_velocity_qv, "computing angular velocity");
-  omega_vec := qu_subs([MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-angular_velocity(body[parse("frame")]),body[parse("frame")])], q_vars, qv_eqns);
+  omega_vec := qu_subs([MBSymba_r6_kinematics:-comp_XYZ(MBSymba_r6_kinematics:-angular_velocity(body[parse("frame")]),body[parse("frame")])], q_vars, qv_eqns, parse("constr") = constr);
   userinfo(5, angular_velocity_qv, "angular velocity vector", print(omega_vec));
   userinfo(3, angular_velocity_qv, "computing angular velocity -- DONE");
 
@@ -481,6 +491,7 @@ MBScar := module()
   body::MBSymba_BODY,
   q_vars::list(scalar),
   qv_eqns::list({algebraic, `=`}),
+  {constr::list(scalar) := [NULL]},
   $)::algebraic;
 
   description "Compute the linear momentum of the body terms of the quasi-velocities.";
@@ -490,7 +501,7 @@ MBScar := module()
   userinfo(3, linear_momentum_qv, "computing linear momentum");
 
   # linear velocity vector v_vec
-  v_vec := linear_velocity_qv(body, q_vars, qv_eqns);
+  v_vec := linear_velocity_qv(body, q_vars, qv_eqns, parse("constr") = constr);
 
   # linear momentum
   p := body[parse("mass")] *~ v_vec;
@@ -506,6 +517,7 @@ MBScar := module()
   body::MBSymba_BODY,
   q_vars::list(scalar),
   qv_eqns::list({algebraic, `=`}),
+  {constr::list(scalar) := [NULL]},
   $)::algebraic;
 
   description "Compute the angular momentum of the body terms of the quasi-velocities.";
@@ -515,7 +527,7 @@ MBScar := module()
   userinfo(3, angular_momentum_qv, "computing angular momentum");
 
   # angular velocity vector omega_vec
-  omega_vec := angular_velocity_qv(body, q_vars, qv_eqns);
+  omega_vec := angular_velocity_qv(body, q_vars, qv_eqns, parse("constr") = constr);
 
   # angular momentum
   H := convert(body[parse("inertia")] . <omega_vec>, list);
@@ -638,12 +650,13 @@ MBScar := module()
   q_vars::list(scalar),
   u_vars::list(scalar),
   qv_eqns::list({algebraic, `=`}),
+  {constr::list(scalar) := [NULL]},
   $)::list(algebraic);
 
   description "Compute the fundamental equations of motion of the system.";
   option remember;
   local bodies, forces, obj, eqns, body, force, T, p, H, gamma, gamma_dot, beta, beta_dot,
-    v, omega, u, Q, i, j, m, tmp;
+    v, omega, u, Q, i, j, m, tmp, n_constr, u_vars_ind;
 
   # if m_WarningMode then
   #   if nops(bodies) > m_CacheSize then
@@ -653,6 +666,12 @@ MBScar := module()
   # end if;
 
   userinfo(3, fundamental_equations, "computing fundamental equations of motion");
+
+  # number of non-holonomic constraints
+  n_constr := nops(constr);
+
+  # extract independent u_vars
+  u_vars_ind := convert(convert(u_vars, set) minus convert(constr, set), list);
 
   # separate bodies and forces
   bodies := [];
@@ -711,7 +730,7 @@ MBScar := module()
   userinfo(3, fundamental_equations, "computing bodies velocities vectors");
   v := [seq(0, i=1..nops(bodies))]; i := 1;
   for body in bodies do
-    v[i] := linear_velocity_qv(eval(body), q_vars, qv_eqns);
+    v[i] := linear_velocity_qv(eval(body), q_vars, qv_eqns, parse("constr") = constr);
     userinfo(5, fundamental_equations, "linear velocity", i, " = ", print(v[i]));
     i := i + 1;
   end do;
@@ -721,7 +740,7 @@ MBScar := module()
   userinfo(3, fundamental_equations, "computing bodies angular velocity vectors");
   omega := [seq(0, i=1..nops(bodies))]; i := 1;
   for body in bodies do
-    omega[i] := angular_velocity_qv(eval(body), q_vars, qv_eqns);
+    omega[i] := angular_velocity_qv(eval(body), q_vars, qv_eqns, parse("constr") = constr);
     userinfo(5, fundamental_equations, "angular velocity", i, " = ", print(omega[i]));
     i := i + 1;
   end do;
@@ -729,11 +748,11 @@ MBScar := module()
 
   # compute gammas and their derivatives
   userinfo(3, fundamental_equations, "computing gammas");
-  gamma := [seq([seq(0, j=1..nops(u_vars))], i=1..nops(bodies))];
-  gamma_dot := [seq([seq(0, j=1..nops(u_vars))], i=1..nops(bodies))];
+  gamma := [seq([seq(0, j=1..nops(u_vars_ind))], i=1..nops(bodies))];
+  gamma_dot := [seq([seq(0, j=1..nops(u_vars_ind))], i=1..nops(bodies))];
   i := 1; j := 1;
   for body in bodies do
-    for u in u_vars do
+    for u in u_vars_ind do
       gamma[i,j] := Diff_f(v[i], u); #(4.223 book)
       userinfo(5, fundamental_equations, "gamma", i, j, " = ", print(gamma[i,j]));
       diff(gamma[i,j],t) +~ convert(LinearAlgebra:-CrossProduct(omega[i], gamma[i,j]), list); # Poisson's formula
@@ -748,11 +767,11 @@ MBScar := module()
 
   # compute betas and their derivatives
   userinfo(3, fundamental_equations, "computing betas");
-  beta := [seq([seq(0, j=1..nops(u_vars))], i=1..nops(bodies))];
-  beta_dot := [seq([seq(0, j=1..nops(u_vars))], i=1..nops(bodies))];
+  beta := [seq([seq(0, j=1..nops(u_vars_ind))], i=1..nops(bodies))];
+  beta_dot := [seq([seq(0, j=1..nops(u_vars_ind))], i=1..nops(bodies))];
   i := 1; j := 1;
   for body in bodies do
-    for u in u_vars do
+    for u in u_vars_ind do
       beta[i,j] := Diff_f(omega[i], u); #(4.223 book)
       userinfo(5, fundamental_equations, "beta", i, j, " = ", print(beta[i,j]));
       diff(beta[i,j],t) +~ convert(LinearAlgebra:-CrossProduct(omega[i], beta[i,j]), list); # Poisson's formula
@@ -767,16 +786,16 @@ MBScar := module()
 
   # compute generalized forces
   userinfo(3, fundamental_equations, "computing generalized forces");
-  Q := Array(1..nops(u_vars)); j := 1; [seq(0, j=1..nops(u_vars))]; j := 1;
+  Q := Array(1..nops(u_vars_ind)); j := 1; [seq(0, j=1..nops(u_vars_ind))]; j := 1;
   if m_ParallelMode then
     #m := Threads:-Mutex:-Create();
-    #Threads:-Task:-Start( null, seq(Task=[compute_generalized_force, m, j, Q, bodies, forces, gamma, beta], j = 1..nops(u_vars)) ):
-    #Threads:-Map[2](compute_generalized_force, m, [seq(j, j=1..nops(u_vars))], Q, bodies, forces, gamma, beta);
-    Threads:-Wait(seq(Threads:-Create(compute_generalized_force(m, j, Q, bodies, forces, gamma, beta)),j=1..nops(u_vars))):
+    #Threads:-Task:-Start( null, seq(Task=[compute_generalized_force, m, j, Q, bodies, forces, gamma, beta], j = 1..nops(u_vars_ind)) ):
+    #Threads:-Map[2](compute_generalized_force, m, [seq(j, j=1..nops(u_vars_ind))], Q, bodies, forces, gamma, beta);
+    Threads:-Wait(seq(Threads:-Create(compute_generalized_force(m, j, Q, bodies, forces, gamma, beta)),j=1..nops(u_vars_ind))):
     #Threads:-Mutex:-Destroy(m);
     userinfo(5, fundamental_equations, "generalized forces = ", print(convert(Q, list)));
   else
-    for u in u_vars do
+    for u in u_vars_ind do
       userinfo(4, fundamental_equations, "computing generalized force", j, " for the quasi-velocity ", u);
       compute_generalized_force(1, j, Q, bodies, forces, gamma, beta);
       userinfo(5, fundamental_equations, "generalized force", j, " = ", print(Q[j]));
@@ -790,7 +809,7 @@ MBScar := module()
   userinfo(3, fundamental_equations, "computing bodies linear momentum");
   p := [seq(0, i=1..nops(bodies))]; i := 1;
   for body in bodies do
-    p[i] := linear_momentum_qv(eval(body), q_vars, qv_eqns);
+    p[i] := linear_momentum_qv(eval(body), q_vars, qv_eqns, parse("constr") = constr);
     userinfo(5, fundamental_equations, "linear momentum", i, " = ", print(p[i]));
     i := i + 1;
   end do;
@@ -800,7 +819,7 @@ MBScar := module()
   userinfo(3, fundamental_equations, "computing bodies angular momentum");
   H := [seq(0, i=1..nops(bodies))]; i := 1;
   for body in bodies do
-    H[i] := angular_momentum_qv(eval(body), q_vars, qv_eqns);
+    H[i] := angular_momentum_qv(eval(body), q_vars, qv_eqns, parse("constr") = constr);
     userinfo(5, fundamental_equations, "angular momentum", i, " = ", print(H[i]));
     i := i + 1;
   end do;
@@ -808,20 +827,20 @@ MBScar := module()
 
   # compute kinetic energy
   userinfo(3, fundamental_equations, "computing kinetic energy");
-  T := kinetic_energy_qv(bodies, q_vars, QV_eq);
+  T := kinetic_energy_qv(bodies, q_vars, QV_eq, parse("constr") = constr);
   userinfo(5, fundamental_equations, "kinetic energy", print(T));
   userinfo(3, fundamental_equations, "computing kinetic energy -- DONE");
 
   # compute fundamental equation of motion
   userinfo(3, fundamental_equations, "computing fundamental equations of motion");
-  eqns := Array(1..nops(u_vars)); j := 1; i := 1;
+  eqns := Array(1..nops(u_vars_ind)); j := 1; i := 1;
   if m_ParallelMode then
     #m := Threads:-Mutex:-Create();
-    Threads:-Wait(seq(Threads:-Create(compute_feqm(m, j, eqns, q_vars, u_vars, qv_eqns, bodies, T, p, H, Q, gamma_dot, beta_dot)),j=1..nops(u_vars))):
+    Threads:-Wait(seq(Threads:-Create(compute_feqm(m, j, eqns, q_vars, u_vars_ind, qv_eqns, bodies, T, p, H, Q, gamma_dot, beta_dot)),j=1..nops(u_vars_ind))):
     #Threads:-Mutex:-Destroy(m);
   else
-    for u in u_vars do
-      compute_feqm(1, j, eqns, q_vars, u_vars, qv_eqns, bodies, T, p, H, Q, gamma_dot, beta_dot);
+    for u in u_vars_ind do
+      compute_feqm(1, j, eqns, q_vars, u_vars_ind, qv_eqns, bodies, T, p, H, Q, gamma_dot, beta_dot);
       j := j + 1;
     end do;
   end if;
@@ -829,7 +848,7 @@ MBScar := module()
 
   userinfo(3, fundamental_equations, "computing fundamental equations of motion -- DONE");
 
-  return Simplify[m_TimeLimit * nops(u_vars)](eqns);
+  return Simplify[m_TimeLimit * nops(u_vars_ind)](eqns);
   end proc;
 
   # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
