@@ -610,31 +610,20 @@ MBScar := module()
       for force in forces do
         if IsFORCE(force) then
           if IsEqual(force[parse("acting")], body) then
-            # printf("debug %d _1\n", j);
             Q[j] := Q[j] + <MBSymba_r6_kinematics:-comp_XYZ(Project(eval(force), eval(body[parse("frame")])))>^%T . <gamma[i,j]>;
-            # printf("end debug %d _1\n", j);
           elif IsEqual(force[parse("reacting")], body) then # NOTE: no force should have a reacting body after projection
-            # printf("debug %d _2\n", j);
             Q[j] := Q[j] + <-MBSymba_r6_kinematics:-comp_XYZ(Project(eval(force), eval(body[parse("frame")])))>^%T . <gamma[i,j]>;
-            # printf("end debug %d _2\n", j);
           end if;
         elif IsTORQUE(force) then
           if IsEqual(force[parse("acting")], body) then
-            # printf("debug %d _3\n", j);
             Q[j] := Q[j] + <MBSymba_r6_kinematics:-comp_XYZ(Project(eval(force), eval(body[parse("frame")])))>^%T . <beta[i,j]>;
-            # printf("end debug %d _3\n", j);
           elif IsEqual(force[parse("reacting")], body) then
-            # printf("debug %d _4\n", j);
             Q[j] := Q[j] + <-MBSymba_r6_kinematics:-comp_XYZ(Project(eval(force), eval(body[parse("frame")])))>^%T . <beta[i,j]>;
-            # printf("end debug %d _4\n", j);
           end if;
         end if;
-        # printf("Here0\n", j);
       end do;
       i := i + 1;
-      # printf("Here1\n", j);
   end do;
-  # printf("Here2\n", j);
 
   if m_ParallelMode then
     printf("Thread %d ended\n", j);
@@ -717,9 +706,11 @@ MBScar := module()
         userinfo(5, fundamental_equations, "projected force", print(show(force)));
         # create "acting" force on reacting body
         if has(lhs~(op(op(force))), parse("reacting")) then
-          MBSymba_r6_dynamics:-make_FORCE(MBSymba_r6_kinematics:-make_VECTOR(-force[parse("comps")], force[parse("frame")]), MBSymba_r6_kinematics:-origin(force[parse("reacting")][parse("frame")]), force[parse("reacting")]);
-          forces := [op(forces), %];
-          userinfo(5, fundamental_equations, "projected force (reacting body)", print(show(forces[-1])));
+          if force[parse("reacting")] <> NULL then
+            MBSymba_r6_dynamics:-make_FORCE(MBSymba_r6_kinematics:-make_VECTOR(force[parse("frame")], op(convert(-force[parse("comps")][1..3],list))), MBSymba_r6_kinematics:-origin(force[parse("reacting")][parse("frame")]), force[parse("reacting")]);
+            forces := [op(forces), %];
+            userinfo(5, fundamental_equations, "projected force (reacting body)", print(show(forces[-1])));
+          end if;
         end if;
       end if;
     end if;
